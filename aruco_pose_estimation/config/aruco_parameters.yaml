@@ -5,7 +5,7 @@
         aruco_dictionary_id: DICT_6X6_50 # Aruco dictionary type
         # Input topics
         image_topic: /camera/camera/color/image_raw # Input image topic
-        use_depth_input: false # Use depth image for 3D pose estimation
+        use_depth_input: true # Use depth image for 3D pose estimation
         depth_image_topic: /camera/camera/aligned_depth_to_color/image_raw # Input depth image topic
         camera_info_topic: /camera/camera/color/camera_info # Input camera info topic with camera intrinsic parameters
         camera_frame: camera_color_optical_frame # Camera link frame of reference
@@ -13,3 +13,4 @@
         detected_markers_topic: /aruco/markers # Output topic with detected markers (aruco poses + ids)
         markers_visualization_topic: /aruco/poses # Output topic with visualization of detected markers as pose array
         output_image_topic: /aruco/image # Output topic with visualization of detected markers drawn on image
+        output_image_topic2: /yolo_annotated_image # Output topic with visualization of detected markers drawn on image
