@@ -235,16 +235,7 @@ class aruco_tf(Node):
 				transform_msg.transform.rotation.w = qw
 				self.br.sendTransform(transform_msg)
 
-				pose = Pose()
-				pose.position.x = float(x_1)
-				pose.position.y = float(y_1)
-				pose.position.z = float(z_1)
-				pose.orientation.x = qx
-				pose.orientation.y = qy
-				pose.orientation.z = qz
-				pose.orientation.w = qw
 
-				self.aruco_markers_msg.poses.append(pose)
 
 				try:
 					t = self.tf_buffer.lookup_transform('link_base', transform_msg.child_frame_id, rclpy.time.Time())
@@ -263,6 +254,18 @@ class aruco_tf(Node):
 					print(aruco_id)
 					self.get_logger().info(f'Id is {aruco_id}')
 					self.br.sendTransform(transform_msg)
+
+					pose = Pose()
+					pose.position.x = t.transform.translation.x
+					pose.position.y = t.transform.translation.y
+					pose.position.z = t.transform.translation.z
+					pose.orientation.x = t.transform.rotation.x
+					pose.orientation.y = t.transform.rotation.y
+					pose.orientation.z = t.transform.rotation.z
+					pose.orientation.w = t.transform.rotation.w
+
+					self.aruco_markers_msg.poses.append(pose)
+					
 				except Exception as e:
 					pass
 			self.aruco_markers_msg.header.stamp = self.get_clock().now().to_msg()
