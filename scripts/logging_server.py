@@ -27,6 +27,7 @@ from std_srvs.srv import Empty
 from rclpy.wait_for_message import wait_for_message
 from aruco_interfaces.msg import ArucoMarkers
 from rclpy_message_converter import json_message_converter
+from ras_interfaces.srv import StatusLog
 
 class LoggingServer(Node):
     
@@ -36,6 +37,7 @@ class LoggingServer(Node):
         self.topic_name = '/aruco_markers'
         self.qos_value = 10
         self.timeout_value = 3
+        self.log_client = self.create_client(StatusLog, '/traj_status')
         self.get_logger().info('Logging server started')
 
     def logging_callback(self, request, response):
@@ -45,8 +47,13 @@ class LoggingServer(Node):
             return response
         else:
             self.get_logger().info('Message received for topic %s' % self.topic_name)
+            req = StatusLog.Request()
+            req.traj_status = "SUCCESS"
+            req.gripper_status = False
+            req.current_traj = 0
+            self.log_client.call_async(req)
             json_msg = json_message_converter.convert_ros_message_to_json(msg)
-            with open('pose_log2.json', 'a') as log_file:
+            with open('/ras_real_lab/logs/pose_log2.json', 'a') as log_file:
                 log_file.write(f'{json_msg}\n')
 
         self.get_logger().info('Logging request received')
@@ -55,7 +62,8 @@ class LoggingServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LoggingServer()
-    rclpy.spin(node)
+    while rclpy.ok():
+        rclpy.spin_once(node)
     node.destroy_node()
     rclpy.shutdown()
 
