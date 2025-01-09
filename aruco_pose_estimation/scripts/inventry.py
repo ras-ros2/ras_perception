@@ -18,7 +18,8 @@ class InventoryNode(Node):
             "black_markers": {},  # Black marker poses
             "board": {            # Board state
                 "cells": {},      # Dictionary of cells with their status and pose
-                "center_pose": None  # Center position of the board
+                "center_pose": None,  # Center position of the board
+                "total_empty_cells": 0  # Total number of empty cells
             }
         }
 
@@ -74,6 +75,8 @@ class InventoryNode(Node):
         offsets = [-self.cell_size, 0, self.cell_size]
 
         cell_index = 1
+        empty_cells_count = 0
+
         for row_offset in offsets:
             for col_offset in offsets:
                 # Calculate the position of each cell center
@@ -85,12 +88,18 @@ class InventoryNode(Node):
                 # Determine if the cell is filled or empty
                 cell_status = self.check_cell_status(pose)
 
+                if cell_status == "empty":
+                    empty_cells_count += 1
+
                 # Update the inventory for this cell
                 self.inventory["board"]["cells"][cell_index] = {
                     "pose": pose,
                     "status": cell_status
                 }
                 cell_index += 1
+
+        # Record the total number of empty cells
+        self.inventory["board"]["total_empty_cells"] = empty_cells_count
 
     def check_cell_status(self, cell_pose):
         """
@@ -117,7 +126,7 @@ class InventoryNode(Node):
         msg = String()
         msg.data = inventory_state
         self.inventory_pub.publish(msg)
-        self.get_logger().info("Published inventory state.")
+        self.get_logger().info(f"Published inventory state. Total empty cells: {self.inventory['board']['total_empty_cells']}")
 
 def main():
     rclpy.init()
