@@ -44,15 +44,17 @@ camera_matrix = np.array([
 
 dist_coeffs = None  # If you have them, set them here.
 
+
+
 # YOLO model path
-YOLO_MODEL_PATH = r"C:\Users\saman\Downloads\tictactoe_model_updated.pt"
+YOLO_MODEL_PATH = r"/home/mdfh/ros2_ws/src/ras_perception/scripts/tictactoe_model_updated.pt"
 
 # ArUco dictionary
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
 aruco_params = cv2.aruco.DetectorParameters()
 
 # Initialize YOLO model once
-model = load_yolo_model(YOLO_MODEL_PATH)
+model = load_yolo_model(YOLO_MODEL_PATH) # this one is not being used 
 
 # -------------------------------------------------------------------------
 # YAML helpers for inventory
@@ -268,6 +270,8 @@ def run_detection_once(color_image, depth_image, depth_scale):
     corners_2d, ids, _ = cv2.aruco.detectMarkers(
         color_image, aruco_dict, parameters=aruco_params
     )
+    
+    print(f"\n\n[ID]: {ids}, [CORNER_2d]: {corners_2d}")
     rvec, tvec = None, None
 
     marker_positions = {"black": [], "white": []}
