@@ -64,7 +64,7 @@ def detect_aruco(image, depth):
 		dist_mat = np.array([0.0,0.0,0.0,0.0,0.0])
 
 		size_of_aruco_cm = 15
-		dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+		dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
 
 		try:
 			arucoParams = cv2.aruco.DetectorParameters()
@@ -73,8 +73,8 @@ def detect_aruco(image, depth):
 			arucoParams.cornerRefinementWinSize = 8  
 
 	
-			brightness = 15 
-			contrast = 5  
+			brightness = 2
+			contrast = 1
 			image = cv2.addWeighted(image, contrast, np.zeros(image.shape, image.dtype), 0, brightness)
 
 			(corners, aruco_id, rejected) = cv2.aruco.detectMarkers(image, dictionary, parameters=arucoParams)
@@ -131,8 +131,8 @@ class aruco_tf(Node):
 		self.depth_image = None
 		self.aruco_markers_msg = ArucoMarkers()
 
-		self.color_cam_sub = self.create_subscription(Image, '/realsense_camera/image_raw', self.colorimagecb, 10)
-		self.depth_cam_sub = self.create_subscription(Image, '/realsense_depth_camera/depth_raw', self.depthimagecb, 10)
+		self.color_cam_sub = self.create_subscription(Image, '/camera/camera/color/image_raw', self.colorimagecb, 10)
+		self.depth_cam_sub = self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depthimagecb, 10)
 		self.aruco_markers_pub = self.create_publisher(ArucoMarkers, '/aruco_markers', 10)
 
 		image_processing_rate = 3                                               
@@ -188,9 +188,9 @@ class aruco_tf(Node):
 				rpy_np = np.array(list_rpy)
 				rot_mat, _ = cv2.Rodrigues(rpy_np)
 
-				transform_matrix = np.array([[1, 0, 0],
+				transform_matrix = np.array([[0, 0, -1],
 									[0, 1, 0],
-									[0, 0, 1]])
+									[-1, 0, 0]])
 				
 				good_mat = np.dot(rot_mat, transform_matrix)
 
@@ -216,15 +216,15 @@ class aruco_tf(Node):
 				x = tvec[i][0][0]
 				y = tvec[i][0][1]
 				z = tvec[i][0][2]
-				x_1 = distance * (sizeCamX - center_list[i][0] - centerCamX) / focalX
-				y_1 = distance * (sizeCamY - center_list[i][1] - centerCamY) / focalY
-				z_1 = distance
+				y_1 = (distance * (sizeCamX - center_list[i][0] - centerCamX) / focalX)/1000
+				z_1 = (distance * (sizeCamY - center_list[i][1] - centerCamY) / focalY)/1000
+				x_1 = distance/1000
 
 				print(x_1, y_1, z_1)
 
 				transform_msg = TransformStamped()
 				transform_msg.header.stamp = self.get_clock().now().to_msg()
-				transform_msg.header.frame_id = 'realsense_camera'
+				transform_msg.header.frame_id = 'camera_link'
 				transform_msg.child_frame_id = f'cam_{aruco_id}'
 				transform_msg.transform.translation.x = float(x_1)
 				transform_msg.transform.translation.y = float(y_1)
