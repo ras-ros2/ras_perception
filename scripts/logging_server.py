@@ -38,6 +38,9 @@ class LoggingServer(Node):
         self.get_logger().info('Logging server started (step execution mode) using RasLogger')
         self.logger.log_info('Logging server initialized - will log data after each step execution')
         
+        # Internal step counter
+        self.internal_step_counter = 0
+        
         # Run test image logging on startup
         self.test_image_logging()
 
@@ -46,16 +49,15 @@ class LoggingServer(Node):
         self.get_logger().info('Running image logging test')
         
         try:
-            # Create a small test image (1x1 pixel PNG)
-            test_image_bytes = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\xd7c\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xdc\xccY\xe7\x00\x00\x00\x00IEND\xaeB`\x82'
-            
-            # Log some test messages
+            # Create a small test image (1x1 pixel PNG, but we'll convert to JPG for logging)
+            test_image = np.zeros((1, 1, 3), dtype=np.uint8)
+            test_image[0, 0] = [255, 255, 255]  # White pixel
+            success_test, test_image_bytes = cv2.imencode('.jpg', test_image)
             self.logger.log_info("Starting image logging test")
             self.logger.log_json({"test": "image_logging", "status": "running"}, "Test metadata")
-            
-            # Log the test image
-            self.logger.log_image(test_image_bytes, "Test tiny PNG image", "png")
-            self.logger.log_info("Test image logged successfully")
+            if success_test:
+                self.logger.log_image(test_image_bytes.tobytes(), "Test tiny JPG image", "jpg")
+                self.logger.log_info("Test tiny JPG image logged successfully")
             
             # Also create and log a small color test image
             # Create a small 50x50 color test image with a red square
@@ -75,33 +77,36 @@ class LoggingServer(Node):
 
     def status_log_callback(self, request, response):
         """Called when a robot step is executed"""
-        step_num = request.current_traj
+        # Increment internal step counter
+        self.internal_step_counter += 1
+        step_num = self.internal_step_counter
         status = request.traj_status
         gripper_state = "closed" if request.gripper_status else "open"
         
-        self.get_logger().info(f'Robot step {step_num} executed with status: {status}, gripper: {gripper_state}')
+        self.get_logger().info(f'Robot step {step_num} (request step: {request.current_traj}) executed with status: {status}, gripper: {gripper_state}')
         
         # Log trajectory status
         log_data = {
             "step": step_num,
+            "request_step": request.current_traj,
             "status": status,
             "gripper": gripper_state
         }
         self.logger.log_json(log_data, description=f"Step {step_num} execution")
-        self.logger.log_info(f"Processing step {step_num} with status {status}")
+        self.logger.log_info(f"Processing step {step_num} (request step: {request.current_traj}) with status {status}")
         
-        # Get the camera images
-        cv_image, depth_image = self.get_camera_images()
+        # Get the camera image
+        cv_image = self.get_camera_images()
         if cv_image is None:
-            self.get_logger().error("Could not get camera images")
+            self.get_logger().error("Could not get camera image")
             response.success = False
             return response
         
         # Process and log data
         timestamp = time.time()
         
-        # 1. Log raw sensor data (camera images)
-        self.log_raw_sensor_data(step_num, cv_image, depth_image, timestamp)
+        # 1. Log raw sensor data (color image only)
+        self.log_raw_sensor_data(step_num, cv_image, timestamp)
         
         # 2. Log perception data from ArUco markers
         self.log_perception_data(step_num)
@@ -110,57 +115,38 @@ class LoggingServer(Node):
         return response
     
     def get_camera_images(self):
-        """Get color and depth images from camera"""
+        """Get only the color image from camera"""
         # Get color image
         ret_img, img_msg = wait_for_message(Image, self, self.image_topic, time_to_wait=self.timeout_value)
         if not ret_img:
             self.get_logger().error(f'No image received on {self.image_topic}')
             self.logger.log_error(f'No image received on {self.image_topic}')
-            return None, None
-            
-        # Get depth image
-        ret_depth, depth_msg = wait_for_message(Image, self, self.depth_topic, time_to_wait=self.timeout_value)
-        if not ret_depth:
-            self.get_logger().error(f'No depth image received on {self.depth_topic}')
-            self.logger.log_error(f'No depth image received on {self.depth_topic}')
-            return None, None
-            
+            return None
         try:
-            # Convert images
+            # Convert image
             cv_image = self.bridge.imgmsg_to_cv2(img_msg, "bgr8")
-            depth_image = self.bridge.imgmsg_to_cv2(depth_msg, depth_msg.encoding)
-            return cv_image, depth_image
+            return cv_image
         except Exception as e:
             self.get_logger().error(f"Image conversion error: {e}")
             self.logger.log_error(f"Image conversion error: {e}")
-            return None, None
+            return None
     
-    def log_raw_sensor_data(self, step_num, cv_image, depth_image, timestamp):
-        """Log raw camera images using RasLogger"""
+    def log_raw_sensor_data(self, step_num, cv_image, timestamp):
+        """Log only the color camera image using RasLogger (JPG only)"""
         try:
-            # Log color image
+            # Log color image as JPG
             success, img_bytes = cv2.imencode('.jpg', cv_image)
             if success:
-                self.logger.log_image(img_bytes.tobytes(), description=f"Color image for step {step_num}")
+                self.logger.log_image(img_bytes.tobytes(), description=f"Color image for step {step_num}", ext="jpg")
                 self.get_logger().info(f"Logged color image for step {step_num}")
-            
-            # Log depth image (normalized for visualization)
-            depth_normalized = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-            success_depth, depth_bytes = cv2.imencode('.png', depth_normalized)
-            if success_depth:
-                self.logger.log_image(depth_bytes.tobytes(), description=f"Depth image for step {step_num}", ext="png")
-                self.get_logger().info(f"Logged depth image for step {step_num}")
-            
-            # Log metadata about raw sensors
+
+            # Log metadata about raw sensor (only color image)
             raw_sensor_metadata = {
                 "step": step_num,
                 "timestamp": timestamp,
-                "color_image_resolution": f"{cv_image.shape[1]}x{cv_image.shape[0]}",
-                "depth_image_resolution": f"{depth_image.shape[1]}x{depth_image.shape[0]}"
+                "color_image_resolution": f"{cv_image.shape[1]}x{cv_image.shape[0]}"
             }
-            
             self.logger.log_json(raw_sensor_metadata, description=f"Raw sensor metadata for step {step_num}")
-            
             return True
         except Exception as e:
             self.get_logger().error(f"Error logging raw sensor data: {e}")
