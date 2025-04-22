@@ -36,7 +36,7 @@ class LoggingServer(Node):
         self.internal_step_counter = 0
         # Initialize file client for image upload
         self.file_client = TransportFileClient()
-        self.test_image_logging()
+        # self.test_image_logging()
 
     def send_image(self, image_path: str, remote_filename: str) -> bool:
         """
@@ -59,47 +59,47 @@ class LoggingServer(Node):
             self.logger.log_error(f"Exception during image upload: {e}")
             return False
 
-    def test_image_logging(self):
-        """Test function to verify image logging works properly"""
-        self.logger.log_info('Running image logging test')
+    # def test_image_logging(self):
+    #     """Test function to verify image logging works properly"""
+    #     self.logger.log_info('Running image logging test')
         
-        try:
-            # Create a small test image (1x1 pixel PNG, but we'll convert to JPG for logging)
-            test_image = np.zeros((1, 1, 3), dtype=np.uint8)
-            test_image[0, 0] = [255, 255, 255]  # White pixel
-            success_test, test_image_bytes = cv2.imencode('.jpg', test_image)
-            self.logger.log_info("Starting image logging test")
-            self.logger.log_json({"test": "image_logging", "status": "running"}, "Test metadata")
-            if success_test:
-                description = "Test tiny JPG image"
-                desc_for_filename = "_" + description.replace(' ', '_').replace('/', '_')
-                from datetime import datetime
-                ts = self.logger._now() if hasattr(self.logger, '_now') else datetime.now().strftime('%Y%m%d_%H%M%S')
-                img_filename = f"img_{ts}{desc_for_filename}.jpg"
-                img_path = os.path.join(self.logger.base_log_dir if hasattr(self.logger, 'base_log_dir') else "logs", "images", img_filename)
-                self.logger.log_image(test_image_bytes.tobytes(), description, "jpg")
-                self.logger.log_info("Test tiny JPG image logged successfully")
-                # Try uploading the test image to file server
-                upload_success = self.send_image(img_path, img_filename)
-                if upload_success:
-                    self.logger.log_info(f"Test image {img_filename} uploaded to file server.")
-                else:
-                    self.logger.log_error(f"Failed to upload test image {img_filename} to file server.")
+    #     try:
+    #         # Create a small test image (1x1 pixel PNG, but we'll convert to JPG for logging)
+    #         test_image = np.zeros((1, 1, 3), dtype=np.uint8)
+    #         test_image[0, 0] = [255, 255, 255]  # White pixel
+    #         success_test, test_image_bytes = cv2.imencode('.jpg', test_image)
+    #         self.logger.log_info("Starting image logging test")
+    #         self.logger.log_json({"test": "image_logging", "status": "running"}, "Test metadata")
+    #         if success_test:
+    #             description = "Test tiny JPG image"
+    #             desc_for_filename = "_" + description.replace(' ', '_').replace('/', '_')
+    #             from datetime import datetime
+    #             ts = self.logger._now() if hasattr(self.logger, '_now') else datetime.now().strftime('%Y%m%d_%H%M%S')
+    #             img_filename = f"img_{ts}{desc_for_filename}.jpg"
+    #             img_path = os.path.join(self.logger.base_log_dir if hasattr(self.logger, 'base_log_dir') else "logs", "images", img_filename)
+    #             self.logger.log_image(test_image_bytes.tobytes(), description, "jpg")
+    #             self.logger.log_info("Test tiny JPG image logged successfully")
+    #             # Try uploading the test image to file server
+    #             upload_success = self.send_image(img_path, img_filename)
+    #             if upload_success:
+    #                 self.logger.log_info(f"Test image {img_filename} uploaded to file server.")
+    #             else:
+    #                 self.logger.log_error(f"Failed to upload test image {img_filename} to file server.")
             
-            # Also create and log a small color test image
-            # Create a small 50x50 color test image with a red square
-            color_test = np.zeros((50, 50, 3), dtype=np.uint8)
-            color_test[10:40, 10:40] = [0, 0, 255]  # Red square in BGR format
+    #         # Also create and log a small color test image
+    #         # Create a small 50x50 color test image with a red square
+    #         color_test = np.zeros((50, 50, 3), dtype=np.uint8)
+    #         color_test[10:40, 10:40] = [0, 0, 255]  # Red square in BGR format
             
-            # Encode the test image to bytes
-            success, color_bytes = cv2.imencode('.jpg', color_test)
-            if success:
-                self.logger.log_image(color_bytes.tobytes(), "Test color image with red square", "jpg")
-                self.logger.log_info("Test color image logged")
+    #         # Encode the test image to bytes
+    #         success, color_bytes = cv2.imencode('.jpg', color_test)
+    #         if success:
+    #             self.logger.log_image(color_bytes.tobytes(), "Test color image with red square", "jpg")
+    #             self.logger.log_info("Test color image logged")
             
-            self.logger.log_info('Image logging test completed')
-        except Exception as e:
-            self.logger.log_error(f'Image logging test failed: {e}')
+    #         self.logger.log_info('Image logging test completed')
+    #     except Exception as e:
+    #         self.logger.log_error(f'Image logging test failed: {e}')
 
     def status_log_callback(self, request, response):
         """Called when a robot step is executed"""
@@ -139,7 +139,7 @@ class LoggingServer(Node):
         self.log_perception_data(step_num)
 
         # 3. After logging/uploading the image, send the filename to the log sender via StatusLog service
-        import time
+        # import time
         start_time = time.time()
         if not self.status_log_client.wait_for_service(timeout_sec=2.0):
             self.logger.log_error('StatusLog service (log sender) not available!')
