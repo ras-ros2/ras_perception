@@ -12,23 +12,17 @@ import cv2
 import numpy as np
 from rclpy.node import Node
 from cv_bridge import CvBridge
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from cv2 import aruco
 from geometry_msgs.msg import Point, Pose, TransformStamped
 import tf2_ros
 from aruco_interfaces.msg import ArucoMarkers
 from ras_logging.ras_logger import RasLogger
-import yaml
 import os
 import json
 import datetime
 from pathlib import Path
 from ras_common.globals import RAS_CONFIGS_PATH
-from ras_transport.interfaces.TransportWrapper import TransportMQTTPublisher
-from rclpy_message_converter import json_message_converter
-
-# Import paho-mqtt for direct MQTT publishing
-import paho.mqtt.client as mqtt
 
 class ArucoCalibration(Node):
     """
@@ -45,14 +39,12 @@ class ArucoCalibration(Node):
         self.bridge = CvBridge()
         self.logger = RasLogger()
         
-        # Variables for controlling calibration target publishing
-        self.publish_start_time = None
-        self.publishing_enabled = True
-        self.publish_duration = 10.0  # Publish for 10 seconds
+        # Variables for controlling calibration data writing
+        self.write_enabled = True  # Always write calibration data
         
-        # Load experiment file to get pick locations
-        self.pick_locations = []
-        self.load_experiment_file()
+        # Path for temporary calibration data file
+        self.temp_calibration_file = os.path.join(RAS_CONFIGS_PATH, "temp_calibration.json")
+        self.last_write_time = 0  # To control write frequency
         
         # Store the inverse transformation from link_base to camera_link
         self.inverse_transform = None
@@ -76,10 +68,17 @@ class ArucoCalibration(Node):
             10
         )
         
-        # Create publisher for the processed image
+        # Create publisher for the processed image (raw)
         self.processed_image_pub = self.create_publisher(
             Image,
             '/aruco_calibration/processed_image',
+            10
+        )
+        
+        # Create publisher for the compressed processed image
+        self.compressed_image_pub = self.create_publisher(
+            CompressedImage,
+            '/aruco_calibration/processed_image/compressed',
             10
         )
         
@@ -102,10 +101,7 @@ class ArucoCalibration(Node):
         self.listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.br = tf2_ros.TransformBroadcaster(self)
         
-        # Add a parameter for enabling/disabling pick location highlighting (true by default)
-        self.declare_parameter('show_pick_locations', True)
-        self.show_pick_locations = self.get_parameter('show_pick_locations').value
-        self.logger.log_info(f"Pick location highlighting is {'enabled' if self.show_pick_locations else 'disabled'}")
+        # Removed pick location highlighting functionality
         
         # Set up timer for processing images
         self.timer = self.create_timer(0.1, self.process_image)  # 10 Hz
@@ -125,45 +121,7 @@ class ArucoCalibration(Node):
         self.aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         self.aruco_params.cornerRefinementWinSize = 8
         
-        # Initialize MQTT publisher for calibration target data
-        self.mqtt_pub = TransportMQTTPublisher("robot/calibration_target")
-        try:
-            self.mqtt_pub.connect_with_retries()
-            # Get MQTT broker details
-            if hasattr(self.mqtt_pub, 'client') and hasattr(self.mqtt_pub.client, '_host'):
-                mqtt_host = self.mqtt_pub.client._host
-                mqtt_port = self.mqtt_pub.client._port
-                self.logger.log_info(f"Connected to MQTT broker at {mqtt_host}:{mqtt_port} for calibration target publishing")
-            else:
-                self.logger.log_info("Connected to MQTT broker for calibration target publishing (broker details not available)")
-        except Exception as e:
-            self.logger.log_error(f"Failed to connect to MQTT broker: {e}")
-            
-        # Initialize a direct MQTT client as a backup
-        try:
-            # Load MQTT configuration from ras_conf.yaml
-            config_path = os.path.join(RAS_CONFIGS_PATH, 'ras_conf.yaml')
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            mqtt_config = config.get('ras', {}).get('transport', {}).get('mqtt', {})
-            mqtt_host = mqtt_config.get('ip', 'dev2.deepklarity.ai')
-            # Ensure we're using the correct domain (.ai not .at)
-            if mqtt_host == 'dev2.deepklarity.at':
-                mqtt_host = 'dev2.deepklarity.ai'
-            mqtt_port = int(mqtt_config.get('port', 9500))
-            
-            # Create a direct MQTT client
-            self.direct_mqtt_client = mqtt.Client()
-            self.logger.log_info(f"Connecting direct MQTT client to {mqtt_host}:{mqtt_port}")
-            print(f"\033[1;32m[ROBOT] Connecting direct MQTT client to {mqtt_host}:{mqtt_port}\033[0m")
-            self.direct_mqtt_client.connect(mqtt_host, mqtt_port)
-            self.direct_mqtt_client.loop_start()  # Start the MQTT client loop
-            self.logger.log_info(f"Connected direct MQTT client to {mqtt_host}:{mqtt_port}")
-            print(f"\033[1;32m[ROBOT] Connected direct MQTT client to {mqtt_host}:{mqtt_port}\033[0m")
-        except Exception as e:
-            self.logger.log_error(f"Failed to connect direct MQTT client: {e}")
-            self.direct_mqtt_client = None
+        # No MQTT functionality
         
         self.logger.log_info("ArUco Calibration node started")
 
@@ -241,61 +199,36 @@ class ArucoCalibration(Node):
         
         return markers
 
-    def load_experiment_file(self):
-        """Load the experiment file to extract pick locations"""
+    # Removed load_experiment_file method - no longer needed since pick location highlighting has been removed
+    
+    def write_calibration_data_to_file(self, x, y, z):
+        """Write calibration data to a temporary file for IoT receiver to read"""
         try:
-            # First, read the calibration config file to get the experiment name
-            calibration_config_path = os.path.join(RAS_CONFIGS_PATH, 'calibration_config.yaml')
-            self.logger.log_info(f"Reading calibration config from: {calibration_config_path}")
+            # Get current time with nanoseconds for more precise timing
+            current_time_msg = self.get_clock().now().to_msg()
+            current_time = current_time_msg.sec + (current_time_msg.nanosec / 1e9)
             
-            if not os.path.exists(calibration_config_path):
-                self.logger.log_error(f"Calibration config file not found at {calibration_config_path}")
+            # Limit write frequency to once every 0.5 seconds to ensure more frequent updates
+            if current_time - self.last_write_time < 0.5:
                 return
-                
-            with open(calibration_config_path, 'r') as f:
-                calibration_config = yaml.safe_load(f)
-                
-            if not calibration_config or 'experiment_name' not in calibration_config:
-                self.logger.log_error("No experiment_name specified in calibration_config.yaml")
-                return
-                
-            experiment_name = calibration_config['experiment_name']
-            self.logger.log_info(f"Using experiment: {experiment_name}")
             
-            # Now load the specified experiment file
-            experiments_dir = os.path.join(RAS_CONFIGS_PATH, 'experiments')
-            experiment_file = os.path.join(experiments_dir, f"{experiment_name}.yaml")
+            self.last_write_time = current_time
             
-            if not os.path.exists(experiment_file):
-                self.logger.log_error(f"Experiment file not found: {experiment_file}")
-                return
+            # Convert to centimeters with 2 decimal places
+            data = {
+                "x": round(x * 100, 2),  # Convert to cm with 2 decimal places
+                "y": round(y * 100, 2),  # Convert to cm with 2 decimal places
+                "z": round(z * 100, 2),  # Convert to cm with 2 decimal places
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # Write the data to the file
+            with open(self.temp_calibration_file, 'w') as f:
+                json.dump(data, f, indent=2)
                 
-            self.logger.log_info(f"Loading experiment file: {experiment_file}")
-            
-            with open(experiment_file, 'r') as f:
-                experiment_data = yaml.safe_load(f)
-            
-            # Extract pick locations from the experiment file
-            if 'Poses' in experiment_data:
-                poses = experiment_data['Poses']
-                for key, value in poses.items():
-                    # Look for 'in' positions which are pick locations
-                    if key.startswith('in') and key != 'in4' and key != 'in5' and key != 'in6':
-                        self.pick_locations.append({
-                            'name': key,
-                            'x': value['x'],
-                            'y': value['y'],
-                            'z': value['z']
-                        })
-                
-                self.logger.log_info(f"Found {len(self.pick_locations)} pick locations in experiment file")
-                for loc in self.pick_locations:
-                    self.logger.log_info(f"Pick location {loc['name']}: x={loc['x']}, y={loc['y']}, z={loc['z']}")
-            else:
-                self.logger.log_error("No 'Poses' section found in experiment file")
-        
+            self.get_logger().info(f"Calibration data written to file: X={data['x']}cm, Y={data['y']}cm, Z={data['z']}cm")
         except Exception as e:
-            self.logger.log_error(f"Error loading experiment file: {e}")
+            self.get_logger().error(f"Error writing calibration data to file: {e}")
     
     def process_image(self):
         """Process the image to detect markers and draw the rectangle"""
@@ -464,6 +397,8 @@ class ArucoCalibration(Node):
                     
                     # Print formatted output to console for easier viewing
                     print(f"\033[1;32m[WORKSPACE CENTER] Robot base frame (cm): X={raw_x*100:.1f}, Y={raw_y*100:.1f}, Z={raw_z*100:.1f}\033[0m")
+                    
+                    # Note: We'll write to file later in the code to avoid duplicate writes
                 
                 # Set orientation
                 pose.orientation.x = t.transform.rotation.x
@@ -482,67 +417,37 @@ class ArucoCalibration(Node):
                 # Publish the target position to ROS topic
                 self.calibration_target_pub.publish(aruco_markers_msg)
                 
-                # Check if we should publish via MQTT (only for 10 seconds after first detection)
-                current_time = self.get_clock().now()
+                # Always write calibration data to file regardless of whether all 4 markers were found
+                # This ensures we keep writing even if we temporarily lose sight of some markers
+                if self.write_enabled:
+                    try:
+                        # Write calibration data to file
+                        self.write_calibration_data_to_file(raw_x, raw_y, raw_z)
+                        self.logger.log_info("Wrote calibration target data to file")
+                    except Exception as e:
+                        self.logger.log_error(f"Error writing calibration target data to file: {e}")
                 
-                # If this is the first time we're detecting markers, start the timer
-                if self.publish_start_time is None and self.publishing_enabled:
-                    self.publish_start_time = current_time
-                    self.logger.log_info(f"Starting calibration target publishing for {self.publish_duration} seconds")
-                    print(f"\033[1;33m[CALIBRATION] Publishing calibration target data for {self.publish_duration} seconds\033[0m")
-                
-                # Check if we're still within the publishing window
-                if self.publishing_enabled and self.publish_start_time is not None:
-                    elapsed_seconds = (current_time - self.publish_start_time).nanoseconds / 1e9
-                    
-                    if elapsed_seconds <= self.publish_duration:
-                        # Still within publishing window, publish to MQTT
-                        try:
-                            # Convert the ArucoMarkers message to JSON string, then parse back to dict
-                            json_str = json_message_converter.convert_ros_message_to_json(aruco_markers_msg)
-                            calibration_data = json.loads(json_str)
-                            
-                            # Add additional metadata
-                            calibration_data['timestamp'] = self._get_timestamp()
-                            calibration_data['type'] = 'calibration_target'
-                            # Convert position to centimeters and round for easier reading
-                            calibration_data['description'] = 'Workspace center coordinates'
-                            calibration_data['workspace_center_cm'] = {
-                                'x': round(raw_x * 100),
-                                'y': round(raw_y * 100),
-                                'z': round(raw_z * 100)
-                            }
-                            # Add time remaining information
-                            time_remaining = self.publish_duration - elapsed_seconds
-                            calibration_data['publishing_time_remaining'] = round(time_remaining, 1)
-                            
-                            # Publish to MQTT
-                            self.mqtt_pub.publish(json.dumps(calibration_data))
-                            self.logger.log_info(f"Published calibration target data to MQTT (time remaining: {time_remaining:.1f}s)")
-                        except Exception as e:
-                            self.logger.log_error(f"Error publishing calibration target data to MQTT: {e}")
-                    else:
-                        # Publishing window has expired
-                        if self.publishing_enabled:  # Only log this once
-                            self.publishing_enabled = False
-                            self.logger.log_info("Calibration target publishing window has expired")
-                            print(f"\033[1;33m[CALIBRATION] Stopped publishing calibration target data after {self.publish_duration} seconds\033[0m")
-                else:
-                    # Publishing is disabled
-                    pass
-                
-                # Store the inverse transform for projecting pick locations
+                # Store the transform for future use if needed
                 self.inverse_transform = t
                 
-                # Project and draw pick locations if we have the transform (enabled by default)
-                if self.inverse_transform is not None:
-                    if self.show_pick_locations:
-                        self.logger.log_info("Drawing pick locations...")
-                        # self.draw_pick_locations(self.output_image)
-                    else:
-                        self.logger.log_info("Pick location highlighting is disabled")
-                else:
-                    self.logger.log_info("Cannot draw pick locations: inverse transform not available")
+                # Publish the processed image (raw and compressed)
+                try:
+                    # Publish raw image
+                    img_msg = self.bridge.cv2_to_imgmsg(self.output_image, "bgr8")
+                    self.processed_image_pub.publish(img_msg)
+                    
+                    # Publish compressed image
+                    compressed_msg = CompressedImage()
+                    compressed_msg.header = img_msg.header
+                    compressed_msg.format = "jpeg"
+                    # Encode the image as JPEG with quality 80
+                    _, jpeg_img = cv2.imencode('.jpg', self.output_image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    compressed_msg.data = np.array(jpeg_img).tobytes()
+                    self.compressed_image_pub.publish(compressed_msg)
+                    
+                    self.logger.log_info("Published processed image (raw and compressed)")
+                except Exception as e:
+                    self.logger.log_error(f'Error publishing processed image: {e}')
                 
             except Exception as e:
                 self.logger.log_error(f'Error transforming to link_base: {e}')
@@ -558,97 +463,7 @@ class ArucoCalibration(Node):
         """Generate a timestamp string"""
         return datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     
-    def draw_pick_locations(self, image):
-        """Draw pick locations from experiment file on the image"""
-        try:
-            # Check if we have the inverse transform
-            if self.inverse_transform is None:
-                self.logger.log_warning("Cannot draw pick locations: inverse transform not available")
-                return
-                
-            # Log pick locations for debugging
-            self.logger.log_info(f"Drawing {len(self.pick_locations)} pick locations")
-            for loc in self.pick_locations:
-                self.logger.log_info(f"Pick location {loc['name']}: x={loc['x']}, y={loc['y']}, z={loc['z']}")
-            
-            # Camera parameters (from aruco_detection.py)
-            sizeCamX = 1280
-            sizeCamY = 720
-            centerCamX = 640 
-            centerCamY = 360
-            focalX = 931.1829833984375
-            focalY = 931.1829833984375
-            
-            # For each pick location
-            for i, location in enumerate(self.pick_locations):
-                # Create a point in base frame
-                # Check if the coordinates are already in meters or need conversion
-                if location['x'] > 10:  # Likely in centimeters if > 10
-                    base_x = location['x'] / 100.0  # Convert from cm to meters
-                    base_y = location['y'] / 100.0
-                    base_z = location['z'] / 100.0
-                else:  # Already in meters
-                    base_x = location['x']
-                    base_y = location['y']
-                    base_z = location['z']
-                
-                # Log the base frame coordinates
-                self.logger.log_info(f"Pick location {i+1} in base frame: x={base_x:.3f}, y={base_y:.3f}, z={base_z:.3f}")
-                
-                # Get the transform from base to camera
-                # The inverse_transform is from camera to base, so we need to invert it
-                cam_x = base_x - self.inverse_transform.transform.translation.x
-                cam_y = base_y - self.inverse_transform.transform.translation.y
-                cam_z = base_z - self.inverse_transform.transform.translation.z
-                
-                # Rotate the point (simplified for now)
-                # This is a basic approach - a full transformation would use quaternion math
-                # For visualization purposes, this approximation should work
-                
-                # Project 3D point to 2D image coordinates
-                # Using the standard pinhole camera model
-                if cam_z > 0:  # Only project points in front of the camera
-                    # Convert to camera coordinates
-                    img_x = int(centerCamX + (cam_x / cam_z) * focalX)
-                    img_y = int(centerCamY + (cam_y / cam_z) * focalY)
-                    
-                    # Log the image coordinates
-                    self.logger.log_info(f"Projected pick location {i+1} to image coordinates: ({img_x}, {img_y})")
-                    
-                    # Check if the point is within the image bounds
-                    if 0 <= img_x < sizeCamX and 0 <= img_y < sizeCamY:
-                        # Draw a rectangle around the pick location
-                        rect_size = 50  # Size of rectangle in pixels
-                        color = (0, 255, 255)  # Yellow color for pick locations
-                        cv2.rectangle(image, 
-                                     (img_x - rect_size//2, img_y - rect_size//2),
-                                     (img_x + rect_size//2, img_y + rect_size//2),
-                                     color, 2)
-                        
-                        # Add a label
-                        cv2.putText(image, 
-                                   f"PLACE CUBE {i+1}", 
-                                   (img_x - rect_size//2, img_y - rect_size//2 - 10),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                        
-                        # Log successful drawing
-                        self.logger.log_info(f"Successfully drew pick location {i+1} at ({img_x}, {img_y})")
-                    else:
-                        self.logger.log_warn(f"Pick location {i+1} is outside image bounds: ({img_x}, {img_y})")
-                else:
-                    self.logger.log_warn(f"Pick location {i+1} is behind the camera (z={cam_z})")
-                
-                # This line is now handled inside the if-else blocks above
-                
-        except Exception as e:
-            self.logger.log_error(f"Error drawing pick locations: {e}")
-        
-        # Publish the processed image
-        try:
-            img_msg = self.bridge.cv2_to_imgmsg(self.output_image, "bgr8")
-            self.processed_image_pub.publish(img_msg)
-        except Exception as e:
-            self.logger.log_error(f'Error publishing processed image: {e}')
+    # Removed draw_pick_locations method - pick location highlighting functionality has been removed
 
 def main():
     rclpy.init(args=sys.argv)
