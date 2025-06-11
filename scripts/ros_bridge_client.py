@@ -6,6 +6,9 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 import roslibpy
+import yaml
+from ras_common.globals import RAS_CONFIGS_PATH
+import os
 
 class MultiCompressedImageBridgeNode(Node):
     def __init__(self):
@@ -25,8 +28,12 @@ class MultiCompressedImageBridgeNode(Node):
             self.depth_image_callback,
             10)
 
-        # Initialize rosbridge client
-        self.rosbridge_client = roslibpy.Ros(host='localhost', port=9090)
+        # Load rosbridge connection info from ras_conf.yaml using RAS_CONFIGS_PATH
+        ras_conf_path = os.path.join(RAS_CONFIGS_PATH, 'ras_conf.yaml')
+        with open(ras_conf_path, 'r') as f:
+            ras_conf = yaml.safe_load(f)
+        rosbridge_ip = ras_conf.get('ras', {}).get('transport', {}).get('file_server', {}).get('ip', '127.0.0.1')
+        self.rosbridge_client = roslibpy.Ros(host=rosbridge_ip, port=9090)
         self.rosbridge_client.on_ready(self.on_rosbridge_ready)
         self.rosbridge_client.on('close', self.on_rosbridge_disconnect)
         self.rosbridge_client.on('error', self.on_rosbridge_error)
