@@ -269,6 +269,7 @@ class aruco_tf(Node):
 				except Exception as e:
 					pass
 			self.aruco_markers_msg.header.stamp = self.get_clock().now().to_msg()
+			self.aruco_markers_msg.header.frame_id = 'link_base'  # Set frame_id to link_base
 			self.aruco_markers_pub.publish(self.aruco_markers_msg)
 		except Exception as e:
 			self.get_logger().error(f'Error in processing image: {e}')
